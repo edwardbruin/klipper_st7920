@@ -10,8 +10,11 @@ from . import font8x14
 BACKGROUND_PRIORITY_CLOCK = 0x7fffffff00000000
 
 # Spec says 72us, but faster is possible in practice
-ST7920_CMD_DELAY  = .000020
-ST7920_SYNC_DELAY = .000045
+#ST7920_CMD_DELAY  = .000020
+#ST7920_SYNC_DELAY = .000045
+
+ST7920_CMD_DELAY  = .000030
+ST7920_SYNC_DELAY = .000050
 
 TextGlyphs = { 'right_arrow': b'\x1a' }
 CharGlyphs = { 'degrees': bytearray(font8x14.VGA_FONT[0xf8]) }
@@ -32,6 +35,10 @@ class DisplayBase:
                  for i in range(32)]
         self.cached_glyphs = {}
         self.icons = {}
+        
+        self.CacheTextAsGraph = [bytearray(32) for i in range(32)]
+        self.CacheGraphics = [bytearray(32) for i in range(32)]
+        
     def flush(self):
         # Find all differences in the framebuffers and send them to the chip
         for new_data, old_data, fb_id in self.all_framebuffers:
@@ -91,11 +98,38 @@ class DisplayBase:
         # Setup animated glyphs
         self.cache_glyph('fan2', 'fan1', 0)
         self.cache_glyph('bed_heat2', 'bed_heat1', 1)
+    
+    def upd_graph(self, x, y, lenX, lenY):
+        for i in range(y,y+lenY):
+            for c in range(x,x+lenX):
+                self.graphics_framebuffers[i][c] = self.CacheTextAsGraph[i][c] ^ self.CacheGraphics[i][c]
+
     def write_text(self, x, y, data):
         if x + len(data) > 16:
             data = data[:16 - min(x, 16)]
-        pos = [0, 32, 16, 48][y] + x
-        self.text_framebuffer[pos:pos+len(data)] = data
+        
+        gfx_fb = 16 * y
+        if gfx_fb >= 32:
+            gfx_fb -= 32
+            x += 16  
+      
+        for i, asc in enumerate(data):
+            if type(asc) is str:
+                c=ord(asc)
+            else:
+                c = asc
+            if c > 6:
+                for r in range(16):
+                    self.CacheTextAsGraph[gfx_fb+r][x+i] = font8x14.VGA_FONT[c][r]
+#Comment out the next 4 lines if you don't want animation. (Reduces the load on the MCU)
+            else:
+                for r in range(16):
+                    self.CacheTextAsGraph[gfx_fb+r][x+i-1] = self.glyph_framebuffer[c*16+r*2]
+                    self.CacheTextAsGraph[gfx_fb+r][x+i] = self.glyph_framebuffer[c*16+r*2+1]
+#****************************************************************************************
+        self.upd_graph(x,gfx_fb,len(data),16)
+
+    
     def write_graphics(self, x, y, data):
         if x >= 16 or y >= 4 or len(data) != 16:
             return
@@ -104,7 +138,10 @@ class DisplayBase:
             gfx_fb -= 32
             x += 16
         for i, bits in enumerate(data):
-            self.graphics_framebuffers[gfx_fb + i][x] = bits
+            self.CacheGraphics[gfx_fb + i][x] = bits
+            
+        self.upd_graph(x,gfx_fb,1,len(data))
+        
     def write_glyph(self, x, y, glyph_name):
         glyph_id = self.cached_glyphs.get(glyph_name)
         if glyph_id is not None and x & 1 == 0:
@@ -133,6 +170,12 @@ class DisplayBase:
         zeros = bytearray(32)
         for gfb in self.graphics_framebuffers:
             gfb[:] = zeros
+        for gfb in self.CacheGraphics:
+            gfb[:] = zeros
+        for gfb in self.CacheTextAsGraph:
+            gfb[:] = zeros
+
+	
     def get_dimensions(self):
         return (16, 4)
 
